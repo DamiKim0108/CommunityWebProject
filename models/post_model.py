@@ -2,7 +2,11 @@ from datetime import datetime, timedelta
 import itertools
 from typing import Optional, Dict
 
-def seed_posts(n: int = 120):
+from .ai_model import check_toxic          # ✅ 같은 폴더 내부
+#from ._storage import POSTS, COMMENTS, COMMENT_ID_SEQ, POST_ID_SEQ  # ✅ 같은 폴더 내부
+#from ._utils import compact_count
+
+def seed_posts(n: int = 10):
     base = datetime(2023, 11, 3, 12, 0, 0)
     posts = []
     for i in range(1, n + 1):
@@ -204,6 +208,31 @@ def create_comment_model(post_id: int, payload: Optional[dict]) -> dict:
     if len(content) > 500:
         return {"message": "validation_error", "data": None}
 
+    moderation = check_toxic(content, threshold=0.7)
+
+    if not moderation["success"]:
+        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
+        return {
+            "message": "ai_error",
+            "data": {
+                "reason": "ai_inference_failed",
+                "error": moderation["error"],
+            },
+        }
+
+    if moderation["is_toxic"]:
+        # 욕설/비도덕적 게시글 → 차단
+        return {
+            "message": "blocked_toxic_post",
+            "data": {
+                "reason": "toxic_content",
+                "model_label": moderation["label"],
+                "score": moderation["score"],
+            },
+        }
+
+
+
     post = next((p for p in POSTS if p["id"] == post_id), None)
     if not post:
         return {"message": "not_found", "data": None}
@@ -236,6 +265,32 @@ def update_comment_model(post_id: int, comment_id: int, payload: Optional[dict])
 
     if len(content) > 500:
         return {"message": "validation_error", "data": None}
+
+    # AI 검사
+    moderation = moderate_text_model(content)
+
+    moderation = check_toxic(content, threshold=0.7)
+
+    if not moderation["success"]:
+        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
+        return {
+            "message": "ai_error",
+            "data": {
+                "reason": "ai_inference_failed",
+                "error": moderation["error"],
+            },
+        }
+
+    if moderation["is_toxic"]:
+        # 욕설/비도덕적 게시글 → 차단
+        return {
+            "message": "blocked_toxic_post",
+            "data": {
+                "reason": "toxic_content",
+                "model_label": moderation["label"],
+                "score": moderation["score"],
+            },
+        }
 
     comments = COMMENTS.get(post_id)
     if comments is None:
@@ -310,6 +365,29 @@ def create_post_model(title: str, body: str,
             "data": {"field": "title", "reason": "too_long"},
         }
 
+    moderation = check_toxic(f"{title}\n{body}", threshold=0.7)
+
+    if not moderation["success"]:
+        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
+        return {
+            "message": "ai_error",
+            "data": {
+                "reason": "ai_inference_failed",
+                "error": moderation["error"],
+            },
+        }
+
+    if moderation["is_toxic"]:
+        # 욕설/비도덕적 게시글 → 차단
+        return {
+            "message": "blocked_toxic_post",
+            "data": {
+                "reason": "toxic_content",
+                "model_label": moderation["label"],
+                "score": moderation["score"],
+            },
+        }
+
     image_filename = None
     if image_info is not None:
         content_type = image_info.get("content_type") or ""
@@ -319,6 +397,7 @@ def create_post_model(title: str, body: str,
                 "data": {"field": "image", "reason": "not_image"},
             }
         image_filename = image_info.get("filename")
+
 
     new_id = next(POST_ID_SEQ)
     now = datetime.utcnow()
@@ -403,6 +482,32 @@ def update_post_model(
             "message": "validation_error",
             "data": {"field": "title", "reason": "too_long"},
         }
+
+    moderation = check_toxic(f"{title}\n{body}", threshold=0.7)
+
+    if not moderation["success"]:
+        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
+        return {
+            "message": "ai_error",
+            "data": {
+                "reason": "ai_inference_failed",
+                "error": moderation["error"],
+            },
+        }
+
+    if moderation["is_toxic"]:
+        # 욕설/비도덕적 게시글 → 차단
+        return {
+            "message": "blocked_toxic_post",
+            "data": {
+                "reason": "toxic_content",
+                "model_label": moderation["label"],
+                "score": moderation["score"],
+            },
+        }
+
+
+
 
     if image_info is not None:
         content_type = image_info.get("content_type") or ""

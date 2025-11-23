@@ -69,6 +69,10 @@ def create_comment_controller(post_id: int, payload: Optional[dict]):
         return JSONResponse(status_code=422, content=body)
     if msg == "not_found":
         return JSONResponse(status_code=404, content=body)
+    if msg == "blocked_toxic_comment":
+        return JSONResponse(status_code=403, content=body)
+    if msg == "ai_error":
+        return JSONResponse(status_code=502, content=body)
 
     return JSONResponse(status_code=201, content=body)
 
@@ -83,6 +87,10 @@ def update_comment_controller(post_id: int, comment_id: int, payload: Optional[d
         return JSONResponse(status_code=422, content=body)
     if msg == "not_found":
         return JSONResponse(status_code=404, content=body)
+    if msg == "blocked_toxic_comment":
+        return JSONResponse(status_code=403, content=body)
+    if msg == "ai_error":
+        return JSONResponse(status_code=502, content=body)
 
     return JSONResponse(status_code=200, content=body)
 
@@ -107,6 +115,10 @@ def create_post_controller(title: str, body: str, image_info: Optional[dict]):
         return JSONResponse(status_code=400, content=body_dict)
     if msg == "validation_error":
         return JSONResponse(status_code=422, content=body_dict)
+    if msg == "blocked_toxic_post":
+        return JSONResponse(status_code=403, content=body_dict)
+    if msg == "ai_error":
+        return JSONResponse(status_code=502, content=body_dict)
 
     return JSONResponse(status_code=201, content=body_dict)
 
@@ -134,5 +146,9 @@ def update_post_controller(
         return JSONResponse(status_code=400, content=body_dict)
     if msg == "validation_error":
         return JSONResponse(status_code=422, content=body_dict)
+    if msg == "blocked_toxic_post":
+        return JSONResponse(status_code=403, content=body_dict)
+    if msg == "ai_error":
+        return JSONResponse(status_code=502, content=body_dict)
 
     return JSONResponse(status_code=200, content=body_dict)
