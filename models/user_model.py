@@ -1,157 +1,127 @@
-import re
-import itertools
-from typing import Optional
+# models/user_model.py
+from typing import Optional, Dict, Any
+from datetime import datetime
 
-# in-memory user 저장소
-USERS: list[dict] = []
-USER_ID_SEQ = itertools.count(start=1)
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
-# 데모용 기본 유저
-USERS.append({
-    "id": next(USER_ID_SEQ),
-    "email": "test@startupcode.kr",
-    "password": "Test@1234",  # 실제 서비스라면 해시
-    "nickname": "startup",
-    "profile_image": "https://image.kr/img.jpg",
-})
-
-EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-PWD_REGEX = re.compile(
-    r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#$%^&*]).{8,20}$"
-)
+from db_models import User
 
 
-def find_user_by_email(email: str) -> Optional[dict]:
-    return next((u for u in USERS if u["email"] == email), None)
-
-
-def signup_model(payload: dict) -> dict:
-    email = payload.get("email")
-    password = payload.get("password")
-    nickname = payload.get("nickname")
-    profile_image = payload.get("profile_image")
+def create_user(
+    db: Session,
+    email: str,
+    password: str,
+    nickname: str,
+    profile_image: Optional[str] = None,
+) -> Dict[str, Any]:
+    email = (email or "").strip()
+    password = (password or "").strip()
+    nickname = (nickname or "").strip()
 
     if not email or not password or not nickname:
-        return {"message": "invalid_request", "data": None}
+        return {"error": "invalid_request"}
 
-    if not EMAIL_REGEX.match(email):
-        return {"message": "validation_error", "data": None}
+    # 아주 간단한 이메일 형식 체크 (정규식 대신)
+    if "@" not in email or "." not in email:
+        return {"error": "validation_error", "field": "email"}
 
-    if not PWD_REGEX.match(password):
-        return {"message": "invalid_request", "data": None}
+    new_user = User(
+        email=email,
+        password=password,  # 실제로는 해시 필요
+        nickname=nickname,
+        profile_image=profile_image,
+        created_at=datetime.utcnow(),
+    )
 
-    if find_user_by_email(email) is not None:
-        return {
-            "message": "conflict_email",
-            "data": {
-                "button_color": "#7F6AEE"
-            }
-        }
+    db.add(new_user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # 이메일 unique 제약 위반
+        return {"error": "email_conflict"}
 
-    user_id = next(USER_ID_SEQ)
-    user = {
-        "id": user_id,
-        "email": email,
-        "password": password,
-        "nickname": nickname,
-        "profile_image": profile_image or None,
-    }
-    USERS.append(user)
+    db.refresh(new_user)
 
-    return {
-        "message": "register_success",
-        "data": {
-            "user_id": user_id,
-            "redirect": "/login",
-            "button_color": "#7F6AEE",
-            "profile_image": user["profile_image"],
-        },
-    }
+    return {"user_id": new_user.id}
 
 
-def login_model(payload: dict) -> dict:
-    email = payload.get("email")
-    password = payload.get("password")
+def authenticate_user(
+    db: Session,
+    email: str,
+    password: str,
+) -> Dict[str, Any]:
+    email = (email or "").strip()
+    password = (password or "").strip()
 
     if not email or not password:
-        return {"message": "invalid_request", "data": None}
+        return {"error": "invalid_request"}
 
-    if not EMAIL_REGEX.match(email):
-        return {"message": "validation_error", "data": None}
-
-    if not PWD_REGEX.match(password):
-        return {"message": "invalid_request", "data": None}
-
-    user = find_user_by_email(email)
-    if not user or user["password"] != password:
-        return {"message": "unauthorized", "data": None}
-
-    return {
-        "message": "login_success",
-        "data": {
-            "redirect": "/posts"
-        },
-    }
-
-
-def edit_password_model(payload: dict) -> dict:
-    email = payload.get("email")
-    current_password = payload.get("current_password")
-    new_password = payload.get("new_password")
-    confirm_password = payload.get("confirm_password")
-
-    if not email or not current_password or not new_password or not confirm_password:
-        return {"message": "invalid_request", "data": None}
-
-    user = find_user_by_email(email)
-    if not user or user["password"] != current_password:
-        return {"message": "unauthorized", "data": None}
-
-    if new_password != confirm_password:
-        return {
-            "message": "validation_error",
-            "data": {
-                "field": "confirm_password",
-                "reason": "mismatch",
-            },
-        }
-
-    if not PWD_REGEX.match(new_password):
-        return {
-            "message": "validation_error",
-            "data": {
-                "field": "new_password",
-                "reason": "weak_password",
-            },
-        }
-
-    user["password"] = new_password
-
-    return {
-        "message": "password_updated",
-        "data": None,
-    }
-
-
-def edit_profile_model(payload: dict) -> dict:
-    email = payload.get("email")
-    nickname = payload.get("nickname")
-    profile_image = payload.get("profile_image")
-
-    if not email or not nickname:
-        return {"message": "invalid_request", "data": None}
-
-    user = find_user_by_email(email)
+    user = db.query(User).filter(User.email == email).first()
     if not user:
-        return {"message": "not_found", "data": None}
+        return {"error": "unauthorized"}
 
-    user["nickname"] = nickname
-    user["profile_image"] = profile_image or user.get("profile_image")
+    # 데모용: 평문 비교 (실서비스면 비밀번호 해시 비교)
+    if user.password != password:
+        return {"error": "unauthorized"}
+
+    return {"user_id": user.id}
+
+
+def update_profile(
+    db: Session,
+    user_id: int,
+    nickname: Optional[str],
+    profile_image: Optional[str],
+) -> Dict[str, Any]:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"error": "not_found"}
+
+    if nickname:
+        nickname = nickname.strip()
+        if len(nickname) == 0:
+            return {"error": "invalid_request"}
+        if len(nickname) > 10:
+            return {"error": "nickname_too_long"}
+        user.nickname = nickname
+
+    if profile_image is not None:
+        user.profile_image = profile_image
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
     return {
-        "message": "profile_updated",
-        "data": {
-            "nickname": user["nickname"],
-            "profile_image": user["profile_image"],
-        },
+        "user_id": user.id,
+        "nickname": user.nickname,
+        "profile_image": user.profile_image,
     }
+
+
+def update_password(
+    db: Session,
+    user_id: int,
+    old_password: str,
+    new_password: str,
+) -> Dict[str, Any]:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"error": "not_found"}
+
+    if user.password != (old_password or "").strip():
+        return {"error": "wrong_password"}
+
+    new_password = (new_password or "").strip()
+
+    if len(new_password) < 8 or len(new_password) > 20:
+        return {"error": "validation_error"}
+
+    user.password = new_password
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {"user_id": user.id}

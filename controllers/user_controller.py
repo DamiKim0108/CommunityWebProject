@@ -1,67 +1,146 @@
+# controllers/user_controller.py
+from typing import Dict, Any
+
+from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
-from typing import Optional
 
-from models.user_model import (
-    signup_model,
-    login_model,
-    edit_password_model,
-    edit_profile_model,
-)
+from models import user_model
 
 
-def signup_controller(payload: dict):
-    body = signup_model(payload)
-    msg = body["message"]
+def signup_controller(db: Session, payload: Dict[str, Any]):
+    try:
+        email = payload.get("email")
+        password = payload.get("password")
+        nickname = payload.get("nickname")
+        profile_image = payload.get("profile_image")
 
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body)
-    if msg == "conflict_email":
-        return JSONResponse(status_code=409, content=body)
+        result = user_model.create_user(db, email, password, nickname, profile_image)
+        err = result.get("error")
 
-    # register_success
-    return JSONResponse(status_code=201, content=body)
+        if err == "invalid_request":
+            return JSONResponse(status_code=400, content={
+                "message": "invalid_request",
+                "data": None,
+            })
+        if err == "validation_error":
+            return JSONResponse(status_code=422, content={
+                "message": "validation_error",
+                "data": {"field": result.get("field")},
+            })
+        if err == "email_conflict":
+            return JSONResponse(status_code=409, content={
+                "message": "email_conflict",
+                "data": None,
+            })
 
-
-def login_controller(payload: dict):
-    body = login_model(payload)
-    msg = body["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body)
-    if msg == "unauthorized":
-        return JSONResponse(status_code=401, content=body)
-
-    # login_success
-    return JSONResponse(status_code=200, content=body)
-
-
-def edit_password_controller(payload: dict):
-    body = edit_password_model(payload)
-    msg = body["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body)
-    if msg == "unauthorized":
-        return JSONResponse(status_code=401, content=body)
-
-    # password_updated
-    return JSONResponse(status_code=200, content=body)
+        return JSONResponse(status_code=201, content={
+            "message": "register_success",
+            "data": {"user_id": result["user_id"]},
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
 
 
-def edit_profile_controller(payload: dict):
-    body = edit_profile_model(payload)
-    msg = body["message"]
+def login_controller(db: Session, payload: Dict[str, Any]):
+    try:
+        email = payload.get("email")
+        password = payload.get("password")
 
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "not_found":
-        return JSONResponse(status_code=404, content=body)
+        result = user_model.authenticate_user(db, email, password)
+        err = result.get("error")
 
-    # profile_updated
-    return JSONResponse(status_code=200, content=body)
+        if err == "invalid_request":
+            return JSONResponse(status_code=400, content={
+                "message": "invalid_request",
+                "data": None,
+            })
+        if err == "unauthorized":
+            return JSONResponse(status_code=401, content={
+                "message": "unauthorized",
+                "data": None,
+            })
+
+        return JSONResponse(status_code=200, content={
+            "message": "login_success",
+            "data": {"user_id": result["user_id"]},
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
+
+
+def edit_profile_controller(db: Session, payload: Dict[str, Any]):
+    try:
+        user_id = payload.get("user_id")
+        nickname = payload.get("nickname")
+        profile_image = payload.get("profile_image")
+
+        result = user_model.update_profile(db, user_id, nickname, profile_image)
+        err = result.get("error")
+
+        if err == "not_found":
+            return JSONResponse(status_code=404, content={
+                "message": "not_found",
+                "data": None,
+            })
+        if err == "invalid_request":
+            return JSONResponse(status_code=400, content={
+                "message": "invalid_request",
+                "data": None,
+            })
+        if err == "nickname_too_long":
+            return JSONResponse(status_code=422, content={
+                "message": "validation_error",
+                "data": {"field": "nickname", "reason": "too_long"},
+            })
+
+        return JSONResponse(status_code=200, content={
+            "message": "profile_updated",
+            "data": result,
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
+
+
+def edit_password_controller(db: Session, payload: Dict[str, Any]):
+    try:
+        user_id = payload.get("user_id")
+        old_password = payload.get("old_password")
+        new_password = payload.get("new_password")
+
+        result = user_model.update_password(db, user_id, old_password, new_password)
+        err = result.get("error")
+
+        if err == "not_found":
+            return JSONResponse(status_code=404, content={
+                "message": "not_found",
+                "data": None,
+            })
+        if err == "wrong_password":
+            return JSONResponse(status_code=401, content={
+                "message": "unauthorized",
+                "data": None,
+            })
+        if err == "validation_error":
+            return JSONResponse(status_code=422, content={
+                "message": "validation_error",
+                "data": None,
+            })
+
+        return JSONResponse(status_code=200, content={
+            "message": "password_updated",
+            "data": {"user_id": result["user_id"]},
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })

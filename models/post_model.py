@@ -1,53 +1,16 @@
-from datetime import datetime, timedelta
-import itertools
-from typing import Optional, Dict
+# models/post_model.py
+from typing import Optional, Dict, Any, List
+from datetime import datetime
 
-from .ai_model import check_toxic          # ✅ 같은 폴더 내부
-#from ._storage import POSTS, COMMENTS, COMMENT_ID_SEQ, POST_ID_SEQ  # ✅ 같은 폴더 내부
-#from ._utils import compact_count
+from sqlalchemy.orm import Session
 
-def seed_posts(n: int = 10):
-    base = datetime(2023, 11, 3, 12, 0, 0)
-    posts = []
-    for i in range(1, n + 1):
-        posts.append({
-            "id": i,
-            "title": f"게시글 제목 {i} - 이것은 데모용 긴 제목입니다 (테스트 {i})",
-            "body": f"게시글 {i}의 상세 내용입니다. (상세 페이지용 더미 텍스트)",
-            "created_at": base + timedelta(minutes=i * 7),
-            "comments_count": 0,
-            "views": i * 157,
-            "author": f"user{i%7 or 7}",
-            "image_filename": None,
-        })
-    return posts
-
-
-POSTS = seed_posts()
-COMMENTS: Dict[int, list[dict]] = {p["id"]: [] for p in POSTS}
-LIKES: Dict[int, dict] = {p["id"]: {"count": 0, "users": set()} for p in POSTS}
-
-COMMENT_ID_SEQ = itertools.count(start=1)
-POST_ID_SEQ = itertools.count(start=len(POSTS) + 1)
-
-DEFAULT_CARD_COLOR = "#ACA0EB"
-HOVER_CARD_COLOR   = "#7F6AEE"
-
-LIKE_DEFAULT_COLOR = "#D9D9D9"
-LIKE_ACTIVE_COLOR  = "#ACA0EB"
+from db_models import Post, Comment, User
+from models.ai_model import check_toxic
 
 MAX_TITLE_LEN = 26
 
 
-def truncate_title(title: str, max_len: int = 26) -> str:
-    return title if len(title) <= max_len else title[:max_len]
-
-
-def fmt_datetime(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def compact_count(n: int) -> str:
+def _compact_count(n: int) -> str:
     if n >= 100_000:
         return "100k"
     if n >= 10_000:
@@ -57,476 +20,169 @@ def compact_count(n: int) -> str:
     return str(n)
 
 
-def shape_card(post: dict) -> dict:
+def get_post_list(db: Session, cursor: int, limit: int) -> Dict[str, Any]:
+    total = db.query(Post).count()
+
+    posts: List[Post] = (
+        db.query(Post)
+        .order_by(Post.id.asc())
+        .offset(cursor)
+        .limit(limit)
+        .all()
+    )
+
+    next_cursor = cursor + limit
+    if next_cursor >= total:
+        next_cursor = None
+
+    items = []
+    for p in posts:
+        items.append({
+            "id": p.id,
+            "title": p.title if len(p.title) <= MAX_TITLE_LEN else p.title[:MAX_TITLE_LEN],
+            "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "comments": _compact_count(len(p.comments)),
+            "views": _compact_count(p.views),
+            "detail_url": f"/posts/{p.id}",
+            "colors": {"default": "#ACA0EB", "hover": "#7F6AEE"},
+        })
+
     return {
-        "id": post["id"],
-        "title": truncate_title(post["title"], 26),
-        "created_at": fmt_datetime(post["created_at"]),
-        "comments": compact_count(post["comments_count"]),
-        "views": compact_count(post["views"]),
-        "detail_url": f"/posts/{post['id']}",
-        "colors": {"default": DEFAULT_CARD_COLOR, "hover": HOVER_CARD_COLOR},
+        "items": items,
+        "total": total,
+        "next_cursor": next_cursor,
     }
 
 
-# -----------------------------
-# Model 함수 (dict만 반환)
-# -----------------------------
-
-def go_write_model() -> dict:
-    return {
-        "message": "go_write",
-        "data": {"write_url": "/posts/new"},
-    }
-
-
-def posts_meta_model() -> dict:
-    return {
-        "message": "meta_ok",
-        "data": {
-            "colors": {"default": DEFAULT_CARD_COLOR, "hover": HOVER_CARD_COLOR},
-            "write_url": "/posts/new",
-        },
-    }
-
-
-def list_posts_model(cursor: int, limit: int) -> dict:
-    total = len(POSTS)
-    end = min(cursor + limit, total)
-    items = [shape_card(p) for p in POSTS[cursor:end]]
-    next_cursor = end if end < total else None
-
-    return {
-        "message": "list_ok",
-        "data": {
-            "items": items,
-            "next_cursor": next_cursor,
-            "total": total,
-        },
-    }
-
-
-def get_post_detail_model(post_id: int) -> dict:
-    post = next((p for p in POSTS if p["id"] == post_id), None)
+def get_post_detail(db: Session, post_id: int) -> Optional[Dict[str, Any]]:
+    post: Optional[Post] = db.query(Post).filter(Post.id == post_id).first()
     if not post:
-        return {"message": "not_found", "data": None}
+        return None
 
-    post["views"] += 1
+    # 조회수 +1
+    post.views += 1
+    db.add(post)
+    db.commit()
+    db.refresh(post)
 
-    comments = COMMENTS.get(post_id, [])
-    likes_info = LIKES.get(post_id, {"count": 0, "users": set()})
+    comments_data = []
+    for c in post.comments:
+        comments_data.append({
+            "comment_id": c.id,
+            "author": c.author.nickname if c.author else "unknown",
+            "content": c.content,
+            "created_at": c.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        })
 
     return {
-        "message": "detail_ok",
-        "data": {
-            "id": post["id"],
-            "title": post["title"],
-            "body": post["body"],           # LONGTEXT에 해당
-            "author": post["author"],
-            "created_at": fmt_datetime(post["created_at"]),
-            "views": post["views"],
-            "views_display": compact_count(post["views"]),
-            "comments_count": len(comments),
-            "comments_count_display": compact_count(len(comments)),
-            "likes": likes_info["count"],
-            "comments": [
-                {
-                    "comment_id": c["id"],
-                    "author": c["author"],
-                    "content": c["content"],
-                    "created_at": fmt_datetime(c["created_at"]),
-                }
-                for c in comments
-            ],
-        },
+        "id": post.id,
+        "title": post.title,
+        "body": post.body,
+        "author": post.author.nickname if post.author else "unknown",
+        "created_at": post.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "views": post.views,
+        "views_display": _compact_count(post.views),
+        "comments_count": len(post.comments),
+        "comments_count_display": _compact_count(len(post.comments)),
+        "likes": 0,  # 아직 likes 테이블은 안 만들었으니 0으로 둠
+        "comments": comments_data,
     }
 
 
-def toggle_like_model(post_id: int, payload: Optional[dict]) -> dict:
-    user_id = (payload or {}).get("user_id")
-    if user_id is None:
-        return {"message": "invalid_request", "data": None}
+def create_post(db: Session, author_id: int, title: str, body: str) -> Dict[str, Any]:
+    title = (title or "").strip()
+    body = (body or "").strip()
 
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if not post:
-        return {"message": "not_found", "data": None}
+    if not title or not body:
+        return {"error": "invalid_request"}
 
-    like_info = LIKES.setdefault(post_id, {"count": 0, "users": set()})
-    users = like_info["users"]
+    if len(title) > MAX_TITLE_LEN:
+        return {
+            "error": "validation_error",
+            "field": "title",
+            "reason": "too_long",
+        }
 
-    if user_id in users:
-        users.remove(user_id)
-        like_info["count"] = max(0, like_info["count"] - 1)
-        liked = False
-    else:
-        users.add(user_id)
-        like_info["count"] += 1
-        liked = True
+    # 작성자 존재 여부
+    user = db.query(User).filter(User.id == author_id).first()
+    if not user:
+        return {"error": "user_not_found"}
 
-    return {
-        "message": "like_toggled",
-        "data": {
-            "liked": liked,
-            "likes": like_info["count"],
-            "button_color": LIKE_ACTIVE_COLOR if liked else LIKE_DEFAULT_COLOR,
-        },
-    }
-
-
-def list_comments_model(post_id: int) -> dict:
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if not post:
-        return {"message": "not_found", "data": None}
-
-    comments = COMMENTS.get(post_id, [])
-
-    return {
-        "message": "comments_ok",
-        "data": {
-            "comments_count": len(comments),
-            "comments_count_display": compact_count(len(comments)),
-            "items": [
-                {
-                    "comment_id": c["id"],
-                    "author": c["author"],
-                    "content": c["content"],
-                    "created_at": fmt_datetime(c["created_at"]),
-                }
-                for c in comments
-            ],
-        },
-    }
-
-
-def create_comment_model(post_id: int, payload: Optional[dict]) -> dict:
-    author = (payload or {}).get("author", "anonymous")
-    content = (payload or {}).get("content")
-
-    if not content:
-        return {"message": "invalid_request", "data": None}
-
-    if len(content) > 500:
-        return {"message": "validation_error", "data": None}
-
-    moderation = check_toxic(content, threshold=0.7)
-
+    # AI 욕설/비도덕성 검사
+    moderation = check_toxic(f"{title}\n{body}", threshold=0.7)
     if not moderation["success"]:
-        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
-        return {
-            "message": "ai_error",
-            "data": {
-                "reason": "ai_inference_failed",
-                "error": moderation["error"],
-            },
-        }
-
+        return {"error": "ai_error", "detail": moderation["error"]}
     if moderation["is_toxic"]:
-        # 욕설/비도덕적 게시글 → 차단
         return {
-            "message": "blocked_toxic_post",
-            "data": {
-                "reason": "toxic_content",
-                "model_label": moderation["label"],
-                "score": moderation["score"],
-            },
+            "error": "blocked_toxic_post",
+            "model_label": moderation["label"],
+            "score": moderation["score"],
         }
 
-
-
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if not post:
-        return {"message": "not_found", "data": None}
-
-    comment_id = next(COMMENT_ID_SEQ)
-    comment = {
-        "id": comment_id,
-        "author": author,
-        "content": content,
-        "created_at": datetime.utcnow(),
-    }
-
-    COMMENTS.setdefault(post_id, []).append(comment)
-    post["comments_count"] = len(COMMENTS[post_id])
+    new_post = Post(
+        title=title,
+        body=body,
+        author_id=author_id,
+        created_at=datetime.utcnow(),
+        views=0,
+    )
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
 
     return {
-        "message": "comment_created",
-        "data": {
-            "comment_id": comment_id,
-            "comments_count": post["comments_count"],
-            "comments_count_display": compact_count(post["comments_count"]),
-        },
+        "post_id": new_post.id,
+        "detail_url": f"/posts/{new_post.id}",
     }
 
 
-def update_comment_model(post_id: int, comment_id: int, payload: Optional[dict]) -> dict:
-    content = (payload or {}).get("content")
+def create_comment(
+    db: Session,
+    post_id: int,
+    author_id: int,
+    content: str,
+) -> Dict[str, Any]:
+    content = (content or "").strip()
     if not content:
-        return {"message": "invalid_request", "data": None}
+        return {"error": "invalid_request"}
 
     if len(content) > 500:
-        return {"message": "validation_error", "data": None}
+        return {"error": "validation_error"}
+
+    # 게시글, 작성자 존재 여부
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        return {"error": "not_found"}
+
+    user = db.query(User).filter(User.id == author_id).first()
+    if not user:
+        return {"error": "user_not_found"}
 
     # AI 검사
-    moderation = moderate_text_model(content)
-
     moderation = check_toxic(content, threshold=0.7)
-
     if not moderation["success"]:
-        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
-        return {
-            "message": "ai_error",
-            "data": {
-                "reason": "ai_inference_failed",
-                "error": moderation["error"],
-            },
-        }
-
+        return {"error": "ai_error", "detail": moderation["error"]}
     if moderation["is_toxic"]:
-        # 욕설/비도덕적 게시글 → 차단
         return {
-            "message": "blocked_toxic_post",
-            "data": {
-                "reason": "toxic_content",
-                "model_label": moderation["label"],
-                "score": moderation["score"],
-            },
+            "error": "blocked_toxic_comment",
+            "model_label": moderation["label"],
+            "score": moderation["score"],
         }
 
-    comments = COMMENTS.get(post_id)
-    if comments is None:
-        return {"message": "not_found", "data": None}
+    comment = Comment(
+        post_id=post_id,
+        author_id=author_id,
+        content=content,
+        created_at=datetime.utcnow(),
+    )
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
 
-    comment = next((c for c in comments if c["id"] == comment_id), None)
-    if not comment:
-        return {"message": "not_found", "data": None}
-
-    comment["content"] = content
+    comments_count = db.query(Comment).filter(Comment.post_id == post_id).count()
 
     return {
-        "message": "comment_updated",
-        "data": {
-            "comment_id": comment_id,
-        },
-    }
-
-
-def delete_comment_model(post_id: int, comment_id: int) -> dict:
-    comments = COMMENTS.get(post_id)
-    if comments is None:
-        return {"message": "not_found", "data": None}
-
-    idx = next((i for i, c in enumerate(comments) if c["id"] == comment_id), None)
-    if idx is None:
-        return {"message": "not_found", "data": None}
-
-    comments.pop(idx)
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if post:
-        post["comments_count"] = len(comments)
-
-    return {
-        "message": "comment_deleted",
-        "data": {
-            "comments_count": len(comments),
-            "comments_count_display": compact_count(len(comments)),
-        },
-    }
-
-
-def makepost_meta_model() -> dict:
-    return {
-        "message": "meta_ok",
-        "data": {
-            "max_title_length": MAX_TITLE_LEN,
-            "colors": {
-                "default": "#ACA0EB",
-                "active": "#7F6AEE",
-            },
-            "helper_text": {
-                "title_rule": "*제목은 최대 26자까지 작성 가능합니다.",
-                "title_required": "*제목을 입력해주세요.",
-                "body_required": "*내용을 입력해주세요.",
-            },
-        },
-    }
-
-
-def create_post_model(title: str, body: str,
-                      image_info: Optional[dict]) -> dict:
-    title = title.strip()
-    body = body.strip()
-
-    if not title or not body:
-        return {"message": "invalid_request", "data": None}
-
-    if len(title) > MAX_TITLE_LEN:
-        return {
-            "message": "validation_error",
-            "data": {"field": "title", "reason": "too_long"},
-        }
-
-    moderation = check_toxic(f"{title}\n{body}", threshold=0.7)
-
-    if not moderation["success"]:
-        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
-        return {
-            "message": "ai_error",
-            "data": {
-                "reason": "ai_inference_failed",
-                "error": moderation["error"],
-            },
-        }
-
-    if moderation["is_toxic"]:
-        # 욕설/비도덕적 게시글 → 차단
-        return {
-            "message": "blocked_toxic_post",
-            "data": {
-                "reason": "toxic_content",
-                "model_label": moderation["label"],
-                "score": moderation["score"],
-            },
-        }
-
-    image_filename = None
-    if image_info is not None:
-        content_type = image_info.get("content_type") or ""
-        if not content_type.startswith("image/"):
-            return {
-                "message": "validation_error",
-                "data": {"field": "image", "reason": "not_image"},
-            }
-        image_filename = image_info.get("filename")
-
-
-    new_id = next(POST_ID_SEQ)
-    now = datetime.utcnow()
-
-    new_post = {
-        "id": new_id,
-        "title": title,
-        "body": body,  # LONGTEXT 컬럼에 매핑된다고 가정
-        "created_at": now,
-        "comments_count": 0,
-        "views": 0,
-        "author": "user1",        # 데모용
-        "image_filename": image_filename,
-    }
-
-    POSTS.append(new_post)
-    COMMENTS[new_id] = []
-    LIKES[new_id] = {"count": 0, "users": set()}
-
-    return {
-        "message": "post_created",
-        "data": {
-            "post_id": new_id,
-            "detail_url": f"/posts/{new_id}",
-            "button_color": "#7F6AEE",
-        },
-    }
-
-
-def editpost_meta_model(post_id: int) -> dict:
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if not post:
-        return {"message": "not_found", "data": None}
-
-    image = None
-    if post.get("image_filename"):
-        image = {
-            "filename": post["image_filename"],
-            "url": f"/static/uploads/{post['image_filename']}",
-        }
-
-    return {
-        "message": "edit_meta_ok",
-        "data": {
-            "post": {
-                "id": post["id"],
-                "title": post["title"],
-                "body": post["body"],
-                "created_at": fmt_datetime(post["created_at"]),
-                "author": post["author"],
-                "image": image,
-            },
-            "max_title_length": MAX_TITLE_LEN,
-            "helper_text": {
-                "title_rule": "*제목은 최대 26자까지 작성 가능합니다.",
-                "title_required": "*제목을 입력해주세요.",
-                "body_required": "*내용을 입력해주세요.",
-            },
-        },
-    }
-
-
-def update_post_model(
-    post_id: int,
-    title: str,
-    body: str,
-    image_info: Optional[dict],
-    remove_image: bool,
-) -> dict:
-    post = next((p for p in POSTS if p["id"] == post_id), None)
-    if not post:
-        return {"message": "not_found", "data": None}
-
-    title = title.strip()
-    body = body.strip()
-
-    if not title or not body:
-        return {"message": "invalid_request", "data": None}
-
-    if len(title) > MAX_TITLE_LEN:
-        return {
-            "message": "validation_error",
-            "data": {"field": "title", "reason": "too_long"},
-        }
-
-    moderation = check_toxic(f"{title}\n{body}", threshold=0.7)
-
-    if not moderation["success"]:
-        # AI 모델 자체 문제 (로딩 실패, 추론 실패 등)
-        return {
-            "message": "ai_error",
-            "data": {
-                "reason": "ai_inference_failed",
-                "error": moderation["error"],
-            },
-        }
-
-    if moderation["is_toxic"]:
-        # 욕설/비도덕적 게시글 → 차단
-        return {
-            "message": "blocked_toxic_post",
-            "data": {
-                "reason": "toxic_content",
-                "model_label": moderation["label"],
-                "score": moderation["score"],
-            },
-        }
-
-
-
-
-    if image_info is not None:
-        content_type = image_info.get("content_type") or ""
-        if not content_type.startswith("image/"):
-            return {
-                "message": "validation_error",
-                "data": {"field": "image", "reason": "not_image"},
-            }
-        post["image_filename"] = image_info.get("filename")
-    elif remove_image:
-        post["image_filename"] = None
-
-    post["title"] = title
-    post["body"] = body
-
-    return {
-        "message": "post_updated",
-        "data": {
-            "post_id": post_id,
-            "detail_url": f"/posts/{post_id}",
-        },
+        "comment_id": comment.id,
+        "comments_count": comments_count,
+        "comments_count_display": _compact_count(comments_count),
     }

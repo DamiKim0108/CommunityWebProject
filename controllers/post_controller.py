@@ -1,154 +1,151 @@
+# controllers/post_controller.py
+from typing import Optional, Dict, Any
+
+from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
-from typing import Optional
 
-from models.post_model import (
-    go_write_model,
-    posts_meta_model,
-    list_posts_model,
-    get_post_detail_model,
-    toggle_like_model,
-    list_comments_model,
-    create_comment_model,
-    update_comment_model,
-    delete_comment_model,
-    makepost_meta_model,
-    create_post_model,
-    editpost_meta_model,
-    update_post_model,
-)
+from models import post_model
 
 
-def go_write_controller():
-    body = go_write_model()
-    return JSONResponse(status_code=200, content=body)
+def list_posts_controller(db: Session, cursor: int, limit: int):
+    try:
+        data = post_model.get_post_list(db, cursor, limit)
+        return JSONResponse(status_code=200, content={
+            "message": "list_ok",
+            "data": data,
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
 
 
-def posts_meta_controller():
-    body = posts_meta_model()
-    return JSONResponse(status_code=200, content=body)
+def get_post_detail_controller(db: Session, post_id: int):
+    try:
+        detail = post_model.get_post_detail(db, post_id)
+        if not detail:
+            return JSONResponse(status_code=404, content={
+                "message": "not_found",
+                "data": None,
+            })
+        return JSONResponse(status_code=200, content={
+            "message": "detail_ok",
+            "data": detail,
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
 
 
-def list_posts_controller(cursor: int, limit: int):
-    body = list_posts_model(cursor, limit)
-    return JSONResponse(status_code=200, content=body)
-
-
-def get_post_detail_controller(post_id: int):
-    body = get_post_detail_model(post_id)
-    if body["message"] == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    return JSONResponse(status_code=200, content=body)
-
-
-def toggle_like_controller(post_id: int, payload: Optional[dict]):
-    body = toggle_like_model(post_id, payload)
-    msg = body["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "not_found":
-        return JSONResponse(status_code=404, content=body)
-
-    return JSONResponse(status_code=200, content=body)
-
-
-def list_comments_controller(post_id: int):
-    body = list_comments_model(post_id)
-    if body["message"] == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    return JSONResponse(status_code=200, content=body)
-
-
-def create_comment_controller(post_id: int, payload: Optional[dict]):
-    body = create_comment_model(post_id, payload)
-    msg = body["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body)
-    if msg == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    if msg == "blocked_toxic_comment":
-        return JSONResponse(status_code=403, content=body)
-    if msg == "ai_error":
-        return JSONResponse(status_code=502, content=body)
-
-    return JSONResponse(status_code=201, content=body)
-
-
-def update_comment_controller(post_id: int, comment_id: int, payload: Optional[dict]):
-    body = update_comment_model(post_id, comment_id, payload)
-    msg = body["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body)
-    if msg == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    if msg == "blocked_toxic_comment":
-        return JSONResponse(status_code=403, content=body)
-    if msg == "ai_error":
-        return JSONResponse(status_code=502, content=body)
-
-    return JSONResponse(status_code=200, content=body)
-
-
-def delete_comment_controller(post_id: int, comment_id: int):
-    body = delete_comment_model(post_id, comment_id)
-    if body["message"] == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    return JSONResponse(status_code=200, content=body)
-
-
-def makepost_meta_controller():
-    body = makepost_meta_model()
-    return JSONResponse(status_code=200, content=body)
-
-
-def create_post_controller(title: str, body: str, image_info: Optional[dict]):
-    body_dict = create_post_model(title, body, image_info)
-    msg = body_dict["message"]
-
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body_dict)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body_dict)
-    if msg == "blocked_toxic_post":
-        return JSONResponse(status_code=403, content=body_dict)
-    if msg == "ai_error":
-        return JSONResponse(status_code=502, content=body_dict)
-
-    return JSONResponse(status_code=201, content=body_dict)
-
-
-def editpost_meta_controller(post_id: int):
-    body = editpost_meta_model(post_id)
-    if body["message"] == "not_found":
-        return JSONResponse(status_code=404, content=body)
-    return JSONResponse(status_code=200, content=body)
-
-
-def update_post_controller(
-    post_id: int,
-    title: str,
-    body: str,
-    image_info: Optional[dict],
-    remove_image: bool,
+def create_post_controller(
+    db: Session,
+    author_id: int,
+    payload: Dict[str, Any],
 ):
-    body_dict = update_post_model(post_id, title, body, image_info, remove_image)
-    msg = body_dict["message"]
+    try:
+        title = payload.get("title")
+        body = payload.get("body")
 
-    if msg == "not_found":
-        return JSONResponse(status_code=404, content=body_dict)
-    if msg == "invalid_request":
-        return JSONResponse(status_code=400, content=body_dict)
-    if msg == "validation_error":
-        return JSONResponse(status_code=422, content=body_dict)
-    if msg == "blocked_toxic_post":
-        return JSONResponse(status_code=403, content=body_dict)
-    if msg == "ai_error":
-        return JSONResponse(status_code=502, content=body_dict)
+        result = post_model.create_post(db, author_id, title, body)
+        err = result.get("error")
 
-    return JSONResponse(status_code=200, content=body_dict)
+        if err == "invalid_request":
+            return JSONResponse(status_code=400, content={
+                "message": "invalid_request",
+                "data": None,
+            })
+        if err == "validation_error":
+            return JSONResponse(status_code=422, content={
+                "message": "validation_error",
+                "data": {"field": result.get("field"), "reason": result.get("reason")},
+            })
+        if err == "user_not_found":
+            return JSONResponse(status_code=404, content={
+                "message": "user_not_found",
+                "data": None,
+            })
+        if err == "ai_error":
+            return JSONResponse(status_code=502, content={
+                "message": "ai_error",
+                "data": {"reason": "ai_inference_failed", "error": result.get("detail")},
+            })
+        if err == "blocked_toxic_post":
+            return JSONResponse(status_code=403, content={
+                "message": "blocked_toxic_post",
+                "data": {
+                    "reason": "toxic_content",
+                    "model_label": result.get("model_label"),
+                    "score": result.get("score"),
+                },
+            })
+
+        return JSONResponse(status_code=201, content={
+            "message": "post_created",
+            "data": result,
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
+
+
+def create_comment_controller(
+    db: Session,
+    post_id: int,
+    payload: Optional[Dict[str, Any]],
+):
+    try:
+        author_id = payload.get("author_id")
+        content = payload.get("content")
+
+        result = post_model.create_comment(db, post_id, author_id, content)
+        err = result.get("error")
+
+        if err == "invalid_request":
+            return JSONResponse(status_code=400, content={
+                "message": "invalid_request",
+                "data": None,
+            })
+        if err == "validation_error":
+            return JSONResponse(status_code=422, content={
+                "message": "validation_error",
+                "data": None,
+            })
+        if err == "not_found":
+            return JSONResponse(status_code=404, content={
+                "message": "not_found",
+                "data": None,
+            })
+        if err == "user_not_found":
+            return JSONResponse(status_code=404, content={
+                "message": "user_not_found",
+                "data": None,
+            })
+        if err == "ai_error":
+            return JSONResponse(status_code=502, content={
+                "message": "ai_error",
+                "data": {"reason": "ai_inference_failed", "error": result.get("detail")},
+            })
+        if err == "blocked_toxic_comment":
+            return JSONResponse(status_code=403, content={
+                "message": "blocked_toxic_comment",
+                "data": {
+                    "reason": "toxic_content",
+                    "model_label": result.get("model_label"),
+                    "score": result.get("score"),
+                },
+            })
+
+        return JSONResponse(status_code=201, content={
+            "message": "comment_created",
+            "data": result,
+        })
+    except Exception:
+        return JSONResponse(status_code=500, content={
+            "message": "internal_server_error",
+            "data": None,
+        })
